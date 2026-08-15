@@ -1,0 +1,202 @@
+# Samsara API Development Rules
+
+You are an expert in Samsara Fleet Management API integration. Follow these rules when working with Samsara API code.
+
+## Official Documentation
+- API Reference: https://developers.samsara.com/reference/overview
+- TMS Integration: https://developers.samsara.com/docs/tms-integration
+
+## Base URLs
+- US: https://api.samsara.com
+- EU: https://api.eu.samsara.com
+
+## Authentication
+Always use Bearer token authentication:
+```
+Authorization: Bearer <API_TOKEN>
+```
+
+## Rate Limiting
+Implement three-tier rate limiting:
+1. Per-Token: 150 req/sec
+2. Per-Organization: 200 req/sec (aggregate)
+3. Endpoint-Specific: 5-50 req/sec
+
+Always use exponential backoff with jitter on 429 responses. Respect `Retry-After` header.
+
+## CRITICAL: Route Update Pattern
+When updating routes via PATCH, you MUST preserve stop IDs to maintain state:
+
+```typescript
+// WRONG: Creates new stops, loses arrival/departure times
+const patch = {
+  stops: [{ address: "123 Main St" }]
+};
+
+// CORRECT: Preserves existing stop state
+const existing = await fetch(`/fleet/routes/${routeId}`);
+const updatedStops = existing.stops.map(stop => ({
+  id: stop.id,  // CRITICAL - include existing ID
+  address: stop.address,
+  // ... other fields
+}));
+const patch = { stops: updatedStops };
+```
+
+## Data Sync Patterns
+
+### Real-Time Feeds (Recommended)
+```typescript
+// Poll every 5-10 seconds
+const response = await fetch('/fleet/locations/feed', {
+  method: 'POST',
+  body: JSON.stringify({
+    after: lastCursor,
+    pageSize: 512
+  })
+});
+const { data, endCursor } = await response.json();
+// Store endCursor for next poll
+```
+
+### Bidirectional Sync with Orphan Handling
+```typescript
+const samsaraStopIds = new Set(samsaraStops.map(s => s.id));
+const orphanedStops = yourSystemStops.filter(
+  s => !samsaraStopIds.has(s.samsaraJobId)
+);
+// Unschedule orphans in your system
+```
+
+## External IDs for TMS Integration
+```json
+{
+  "externalIds": {
+    "tms": "ORDER-123",
+    "erp": "SHIP-456"
+  }
+}
+```
+
+Lookup: `GET /fleet/routes/tms:ORDER-123`
+
+## Status Mapping
+```typescript
+const STATUS_MAP = {
+  'scheduled': 'PENDING',
+  'en route': 'ENROUTE',
+  'arrived': 'ARRIVED',
+  'departed': 'COMPLETED',
+  'completed': 'COMPLETED',
+  'skipped': 'CANCELLED'
+};
+
+// GUARD: Never revert completed status
+if (currentStatus === 'COMPLETED' && newStatus !== 'COMPLETED') {
+  return; // Don't update
+}
+```
+
+## Webhook Signature Verification
+```typescript
+import crypto from 'crypto';
+
+function verifyWebhook(payload: string, signature: string, secret: string): boolean {
+  const hmac = crypto.createHmac('sha256', secret);
+  const digest = hmac.update(payload).digest('hex');
+  return crypto.timingSafeEqual(
+    Buffer.from(signature),
+    Buffer.from(digest)
+  );
+}
+```
+
+## Address Parsing
+```typescript
+function parseAddress(location: SamsaraLocation) {
+  return {
+    formatted: location.formattedAddress || '',
+    latitude: location.latitude,
+    longitude: location.longitude,
+    name: location.name || ''
+  };
+}
+```
+
+## Key Endpoints
+
+### Routes
+- `POST /fleet/routes` - Create route
+- `PATCH /fleet/routes/{id}` - Update route (MUST preserve stop IDs)
+- `GET /fleet/routes/{id}` - Get route details
+- `DELETE /fleet/routes/{id}` - Delete route
+
+### Vehicles
+- `GET /fleet/vehicles/stats/feed` - Real-time vehicle data
+- `GET /fleet/vehicles` - List vehicles
+- `GET /fleet/vehicles/{id}` - Vehicle details
+
+### Locations
+- `POST /fleet/locations/feed` - Real-time location feed
+
+### Drivers
+- `GET /fleet/drivers` - List drivers
+- `POST /fleet/drivers` - Create driver
+
+### Webhooks
+- `POST /webhooks` - Create webhook
+- `GET /webhooks` - List webhooks
+
+## Error Handling
+```typescript
+async function callSamsaraAPI(endpoint: string, options: RequestInit) {
+  try {
+    const response = await fetch(endpoint, options);
+    
+    if (response.status === 429) {
+      const retryAfter = response.headers.get('Retry-After');
+      await sleep(retryAfter ? parseInt(retryAfter) * 1000 : 1000);
+      return callSamsaraAPI(endpoint, options); // Retry
+    }
+    
+    if (!response.ok) {
+      throw new Error(`Samsara API error: ${response.statusText}`);
+    }
+    
+    return await response.json();
+  } catch (error) {
+    console.error('Samsara API call failed:', error);
+    throw error;
+  }
+}
+```
+
+## Best Practices
+1. Always fetch existing route before updating to preserve stop IDs
+2. Use feed endpoints for real-time data (poll every 5-10 sec)
+3. Implement conservative rate limiting (5 req/sec default)
+4. Use external IDs for bidirectional sync
+5. Verify webhook signatures with HMAC SHA-256
+6. Never revert completed stops to earlier statuses
+7. Handle orphaned stops when syncing bidirectionally
+8. Use exponential backoff with jitter on rate limit errors
+
+## Common Mistakes to Avoid
+❌ Updating routes without fetching existing stop IDs first
+❌ Polling feeds faster than 5 seconds
+❌ Ignoring rate limit headers
+❌ Not verifying webhook signatures
+❌ Reverting completed statuses
+❌ Using snapshot endpoints for continuous tracking
+❌ Hardcoding base URLs (respect region)
+❌ Not handling 429 responses with backoff
+
+---
+
+When writing Samsara integration code, always:
+1. Check which region (US/EU) the customer uses
+2. Preserve stop IDs when updating routes
+3. Implement proper rate limiting
+4. Use external IDs for TMS linking
+5. Verify webhook signatures
+6. Follow the data sync pattern appropriate for the use case
