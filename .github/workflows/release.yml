@@ -8,7 +8,14 @@ on:
 jobs:
   build-and-release:
     runs-on: ubuntu-latest
-    
+
+    # The default GITHUB_TOKEN is read-only when the repository's workflow
+    # permissions are set to "read repository contents". Creating a release and
+    # uploading the .skill asset are writes, so without this the packaging step
+    # succeeds and the release step 403s three times and aborts.
+    permissions:
+      contents: write
+
     steps:
     - name: Checkout code
       uses: actions/checkout@v3
