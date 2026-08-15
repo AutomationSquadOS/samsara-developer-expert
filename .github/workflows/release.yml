@@ -1,0 +1,51 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+    
+    - name: Package skill
+      run: |
+        python scripts/package_skill.py source/samsara-developer-expert releases/
+    
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: releases/samsara-developer-expert.skill
+        body: |
+          ## Samsara Developer Expert Skill
+          
+          Expert guidance for Samsara API integration.
+          
+          ### Installation
+          1. Download `samsara-developer-expert.skill`
+          2. Go to [Claude.ai](https://claude.ai)
+          3. Settings → Skills → Add Skill
+          4. Upload the file
+          
+          ### What's New
+          See [CHANGELOG](CHANGELOG.md) for details.
+          
+          ### Features
+          - Complete API reference
+          - Data synchronization patterns
+          - Route management with state preservation
+          - Rate limiting implementations
+          - Webhook integration
+          - Production code examples
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
